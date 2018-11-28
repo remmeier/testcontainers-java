@@ -1,25 +1,5 @@
 package org.testcontainers.utility;
 
-import com.github.dockerjava.api.DockerClient;
-import com.github.dockerjava.api.command.InspectContainerResponse;
-import com.github.dockerjava.api.exception.DockerException;
-import com.github.dockerjava.api.exception.InternalServerErrorException;
-import com.github.dockerjava.api.exception.NotFoundException;
-import com.github.dockerjava.api.model.Bind;
-import com.github.dockerjava.api.model.ExposedPort;
-import com.github.dockerjava.api.model.HostConfig;
-import com.github.dockerjava.api.model.Network;
-import com.github.dockerjava.api.model.Ports;
-import com.github.dockerjava.api.model.Volume;
-import com.google.common.annotations.VisibleForTesting;
-import lombok.SneakyThrows;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.http.client.utils.URLEncodedUtils;
-import org.apache.http.message.BasicNameValuePair;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.testcontainers.DockerClientFactory;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,6 +18,27 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.command.CreateContainerCmd;
+import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.exception.DockerException;
+import com.github.dockerjava.api.exception.InternalServerErrorException;
+import com.github.dockerjava.api.exception.NotFoundException;
+import com.github.dockerjava.api.model.Bind;
+import com.github.dockerjava.api.model.ExposedPort;
+import com.github.dockerjava.api.model.HostConfig;
+import com.github.dockerjava.api.model.Network;
+import com.github.dockerjava.api.model.Ports;
+import com.github.dockerjava.api.model.Volume;
+import com.google.common.annotations.VisibleForTesting;
+import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.http.client.utils.URLEncodedUtils;
+import org.apache.http.message.BasicNameValuePair;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.testcontainers.DockerClientFactory;
 
 /**
  * Component that responsible for container removal and automatic cleanup of dead containers at JVM shutdown.
@@ -72,16 +73,18 @@ public final class ResourceReaper {
         List<Bind> binds = new ArrayList<>();
         binds.add(new Bind("//var/run/docker.sock", new Volume("/var/run/docker.sock")));
 
-        String ryukContainerId = client.createContainerCmd(ryukImage)
-                .withHostConfig(new HostConfig().withAutoRemove(true))
-                .withExposedPorts(new ExposedPort(8080))
-                .withPublishAllPorts(true)
-                .withName("testcontainers-ryuk-" + DockerClientFactory.SESSION_ID)
-                .withLabels(Collections.singletonMap(DockerClientFactory.TESTCONTAINERS_LABEL, "true"))
-                .withBinds(binds)
-                .withPrivileged(TestcontainersConfiguration.getInstance().isRyukPrivileged())
-                .exec()
-                .getId();
+        CreateContainerCmd container = client.createContainerCmd(ryukImage)
+            .withHostConfig(new HostConfig().withAutoRemove(true))
+            .withExposedPorts(new ExposedPort(8080))
+            .withPublishAllPorts(true)
+            .withName("testcontainers-ryuk-" + DockerClientFactory.SESSION_ID)
+            .withLabels(Collections.singletonMap(DockerClientFactory.TESTCONTAINERS_LABEL, "true"))
+            .withBinds(binds)
+            .withPrivileged(TestcontainersConfiguration.getInstance().isRyukPrivileged());
+
+        setupProxyEnv(container);
+
+        String ryukContainerId = container.exec().getId();
 
         client.startContainerCmd(ryukContainerId).exec();
 
@@ -149,6 +152,19 @@ public final class ResourceReaper {
         }
 
         return ryukContainerId;
+    }
+
+    private static void setupProxyEnv(CreateContainerCmd container) {
+        String httpProxy = System.getenv("HTTP_PROXY");
+        String httpsProxy = System.getenv("HTTPS_PROXY");
+        if (httpProxy != null) {
+            container.withEnv("HTTP_PROXY", httpProxy);
+            LOGGER.debug("using HTTP_PROXY={} for reaper", httpProxy);
+        }
+        if (httpsProxy != null) {
+            container.withEnv("HTTPS_PROXY", httpsProxy);
+            LOGGER.debug("using HTTPS_PROXY={} for reaper", httpsProxy);
+        }
     }
 
     public synchronized static ResourceReaper instance() {
